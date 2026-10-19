@@ -1,138 +1,93 @@
-# vatSys Persistent Pan
+# vatSys Drag-and-zoom
 
-An open-source plugin for vatSys that improves ASD map navigation.
+An open-source vatSys plugin that changes ASD navigation so the **right mouse
+button drags the map**, while the mouse wheel zooms. The right-button messages
+are translated to vatSys's native middle-button pan messages, so the plugin
+continues to use vatSys's own map projection and rendering behavior.
+
+Repository: <https://github.com/Jurinas-vatsys-plugins/drag-and-zoom>
 
 ## Features
 
-- Keeps the ASD at the position reached after middle-button panning.
-- Prevents the native temporary-pan behaviour from restoring the previous map centre.
-- Adds mouse-wheel zooming for the ASD.
-- Uses vatSys's native map projection, range limits, and rendering APIs.
-- Provides diagnostic logging for input and map state changes.
+- Hold the right mouse button and drag to pan the ASD map.
+- Prevents the native right-click box/zoom action while dragging.
+- Keeps the ASD at the position reached after releasing the drag.
+- Adds mouse-wheel zooming using vatSys's configured range limits.
+- Writes diagnostic input and zoom information to `DragAndZoom.log`.
 
 ## Installation
 
-Download the latest `vatSys.PersistentPan.dll` from the [Releases](https://github.com/lpxlpx7/Drag-and-zoom/releases) page.
-
-Copy the DLL into the `Plugins` directory of the active vatSys Profile:
+Download `vatSys.DragAndZoom.dll` from the [Releases](https://github.com/Jurinas-vatsys-plugins/drag-and-zoom/releases)
+page and copy it into the active vatSys Profile's `Plugins` directory:
 
 ```text
-C:\Users\<username>\Documents\vatSys Files\Profiles\<Profile Name>\Plugins\vatSys.PersistentPan.dll
+C:\Users\<username>\Documents\vatSys Files\Profiles\<Profile Name>\Plugins\vatSys.DragAndZoom.dll
 ```
 
-Restart vatSys after installing or replacing the DLL.
+Restart vatSys after installing or replacing the DLL. The plugin must be in the
+active Profile's `Plugins` directory, not the vatSys installation directory.
 
-The plugin must be installed in the active Profile's `Plugins` directory. The vatSys installation directory is not used for Profile plugins.
-
-The release DLL is compiled against a specific vatSys SDK assembly version. If it cannot be loaded on another computer, rebuild it against that computer's own `vatSys.exe` as described below.
+This repository also retains the original `PersistentPan` project and DLL.
+That plugin is unchanged and uses the middle mouse button. The two plugins are
+separate variants; normally install only the one whose mouse-button behavior
+you want.
 
 ## Usage
 
-### Persistent pan
-
 1. Move the cursor over the ASD.
-2. Press and hold the middle mouse button.
+2. Press and hold the right mouse button.
 3. Drag the map.
-4. Release the middle mouse button.
+4. Release the right mouse button.
 
-The map remains at the final position.
-
-### Wheel zoom
-
-- Scroll up to zoom in.
-- Scroll down to zoom out.
-
-The zoom range follows vatSys's configured limits.
+The map remains at the final position. Scroll up to zoom in and scroll down to
+zoom out.
 
 ## Diagnostics
 
-The plugin writes `PersistentPan.log` beside the DLL:
+The plugin writes `DragAndZoom.log` beside the DLL:
 
 ```text
-<Profile>\Plugins\PersistentPan.log
+<Profile>\Plugins\DragAndZoom.log
 ```
 
-The log records plugin loading, middle-button input, wheel input, and range changes. For example:
+If no log is created, confirm that the DLL is in the active Profile's
+`Plugins` directory and restart every vatSys process.
 
-```text
-Plugin loaded
-Middle down 1000,500
-Middle up 1200,650; replay final move
-Wheel 120
-Range 1500 -> 1200 requested 1200
-```
+## If vatSys cannot load the DLL
 
-If no log is created, confirm that the DLL is in the active Profile's `Plugins` directory and restart every vatSys process.
-
-## Frequently Asked Questions
-
-### vatSys reports that the plugin could not be loaded
-
-Windows may block DLL files downloaded from the Internet. This can prevent vatSys from loading the plugin even when the DLL is in the correct directory.
-
-To remove the block:
-
-1. Close vatSys completely.
-2. Right-click `vatSys.PersistentPan.dll`.
-3. Select **Properties**.
-4. On the **General** tab, look for a security message at the bottom of the window.
-5. Enable **Unblock**.
-6. Click **Apply**, then **OK**.
-7. Start vatSys again.
-
-The **Unblock** option may not appear for files that Windows has not marked as downloaded from the Internet.
-
-The same operation can be performed in PowerShell:
+Windows may block DLL files downloaded from the Internet. Close vatSys, open
+the DLL's **Properties**, enable **Unblock** on the **General** tab, and click
+**Apply**. The same operation can be performed in PowerShell:
 
 ```powershell
-Unblock-File "C:\Users\<username>\Documents\vatSys Files\Profiles\<Profile Name>\Plugins\vatSys.PersistentPan.dll"
+Unblock-File "C:\Users\<username>\Documents\vatSys Files\Profiles\<Profile Name>\Plugins\vatSys.DragAndZoom.dll"
 ```
 
-If the plugin still does not load, confirm that the DLL is in the active Profile's `Plugins` directory, not in `vatSys\bin\Plugins`, and check that the DLL was built against the same vatSys release installed on the computer.
-
-### No `PersistentPan.log` is created
-
-The log is created only after vatSys successfully discovers and instantiates the plugin. Check the DLL path, unblock the file, restart all vatSys processes, and verify the vatSys version compatibility.
+The release DLL must also be compiled against the same vatSys release installed
+on the computer.
 
 ## Building
 
 The project targets the 32-bit .NET Framework 4.7.2 environment used by vatSys.
-
-Requirements:
-
-- Windows
-- .NET Framework 4.7.2 Developer Pack
-- MSBuild
-- A vatSys installation
-
-Build the Release configuration:
+Build against the exact vatSys executable that will load the plugin:
 
 ```powershell
-dotnet msbuild .\PersistentPan\PersistentPan.csproj /p:Configuration=Release /p:Platform=x86
+.\Build-DragAndZoom.ps1 -VatSysExe "C:\Program Files (x86)\vatSys\bin\vatSys.exe"
 ```
 
-To build against a different vatSys installation, pass the full path to that installation's executable:
+Or run MSBuild directly:
 
 ```powershell
-.\Build-ForVatSys.ps1 -VatSysExe "C:\Program Files (x86)\vatSys\bin\vatSys.exe"
+dotnet msbuild .\DragAndZoom\DragAndZoom.csproj /p:Configuration=Release /p:Platform=x86 /p:VatSysPath="I:\vatSys\bin\vatSys.exe"
 ```
-
-The path must point to the same vatSys executable that will load the plugin. This is required when two computers use different vatSys releases.
 
 The compiled plugin is written to:
 
 ```text
-PersistentPan\bin\Release\vatSys.PersistentPan.dll
+DragAndZoom\bin\Release\vatSys.DragAndZoom.dll
 ```
-
-## Compatibility
-
-The plugin uses the vatSys SDK and the ASD methods exposed by the installed vatSys executable. Changes to vatSys's assembly version or internal ASD implementation may require a rebuild or compatibility update. The plugin must be built for the same vatSys release that loads it.
 
 ## License
 
-This project is licensed under the GNU General Public License v3.0. See [LICENSE](LICENSE).
-
-## Acknowledgements
-
-Developed for the vatSys community and intended for use with the vatSys air traffic control simulation environment.
+This project is licensed under the GNU General Public License v3.0. See
+[LICENSE](LICENSE).
