@@ -4,6 +4,7 @@ using System.ComponentModel.Composition;
 using System.Drawing;
 using System.IO;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Threading;
 using System.Windows.Forms;
 using vatsys;
@@ -581,12 +582,23 @@ namespace vatSys.PersistentPan
 
     internal sealed class PanSettingsWindow : Form
     {
+        [DllImport("user32.dll")]
+        private static extern bool ReleaseCapture();
+
+        [DllImport("user32.dll")]
+        private static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
+
+        private const int WmNclButtonDown = 0x00A1;
+        private const int HtCaption = 2;
+
         private readonly PersistentPanSettings settings;
         private readonly string settingsPath;
         private readonly Action<string> log;
         private readonly CheckBox disableZoomBox;
         private readonly KeyCaptureButton shortcutButton;
         private readonly MouseCaptureButton panButton;
+        private readonly Panel titleBar;
+        private readonly Label nativeZoomHint;
 
         public PanSettingsWindow(PersistentPanSettings settings, string settingsPath, Action<string> log)
         {
@@ -596,11 +608,11 @@ namespace vatSys.PersistentPan
 
             Text = "Persistent Pan Settings";
             Name = "PersistentPanSettingsWindow";
-            FormBorderStyle = FormBorderStyle.FixedSingle;
+            FormBorderStyle = FormBorderStyle.None;
             StartPosition = FormStartPosition.CenterScreen;
             MaximizeBox = false;
             MinimizeBox = false;
-            ClientSize = new Size(520, 285);
+            ClientSize = new Size(520, 315);
             ShowInTaskbar = false;
             FormClosing += PanSettingsWindow_FormClosing;
             try
@@ -614,61 +626,90 @@ namespace vatSys.PersistentPan
                 Font = SystemFonts.MessageBoxFont;
             }
 
+            titleBar = new Panel();
+            titleBar.Dock = DockStyle.Top;
+            titleBar.Height = 28;
+            titleBar.BackColor = Color.FromArgb(24, 24, 24);
+            titleBar.MouseDown += TitleBar_MouseDown;
+            titleBar.Paint += TitleBar_Paint;
+
+            Label closeButton = new Label();
+            closeButton.Dock = DockStyle.Right;
+            closeButton.Width = 34;
+            closeButton.Text = "×";
+            closeButton.TextAlign = ContentAlignment.MiddleCenter;
+            closeButton.Font = new Font("Microsoft Sans Serif", 15f, FontStyle.Regular);
+            closeButton.ForeColor = Color.FromArgb(220, 220, 220);
+            closeButton.BackColor = Color.Transparent;
+            closeButton.Cursor = Cursors.Hand;
+            closeButton.MouseEnter += (sender, args) => closeButton.BackColor = Color.FromArgb(150, 40, 40);
+            closeButton.MouseLeave += (sender, args) => closeButton.BackColor = Color.Transparent;
+            closeButton.Click += (sender, args) => Hide();
+            titleBar.Controls.Add(closeButton);
+
             Label description = new Label();
             description.AutoSize = true;
-            description.Location = new Point(15, 15);
+            description.Location = new Point(15, 45);
             description.Font = new Font(Font, FontStyle.Bold);
             description.Text = "Persistent Pan Settings";
 
             disableZoomBox = new CheckBox();
             disableZoomBox.AutoSize = true;
-            disableZoomBox.Location = new Point(18, 55);
+            disableZoomBox.Location = new Point(18, 85);
             disableZoomBox.Text = "Disable native right-button zoom box";
             disableZoomBox.Checked = settings.DisableNativeZoomBox;
             disableZoomBox.CheckedChanged += (sender, args) => UpdateNativeZoomAvailability();
 
+            nativeZoomHint = new Label();
+            nativeZoomHint.AutoSize = true;
+            nativeZoomHint.Location = new Point(300, 112);
+            nativeZoomHint.ForeColor = Color.FromArgb(180, 180, 180);
+            nativeZoomHint.Text = "";
+
             Label hint = new Label();
             hint.AutoSize = true;
-            hint.Location = new Point(18, 82);
+            hint.Location = new Point(18, 112);
             hint.Text = "When enabled, right-button drag on the ASD is ignored.";
 
             Label shortcutLabel = new Label();
             shortcutLabel.AutoSize = true;
-            shortcutLabel.Location = new Point(18, 120);
+            shortcutLabel.Location = new Point(18, 150);
             shortcutLabel.Text = "Settings window shortcut:";
 
             shortcutButton = new KeyCaptureButton(settings.SettingsShortcut);
-            shortcutButton.Location = new Point(250, 113);
+            shortcutButton.Location = new Point(250, 143);
             shortcutButton.Size = new Size(185, 30);
 
             Label shortcutHint = new Label();
             shortcutHint.AutoSize = true;
-            shortcutHint.Location = new Point(18, 155);
+            shortcutHint.Location = new Point(18, 185);
             shortcutHint.Text = "Click the button, then release a key combination. Middle-click clears it.";
 
             Label panLabel = new Label();
             panLabel.AutoSize = true;
-            panLabel.Location = new Point(18, 190);
+            panLabel.Location = new Point(18, 220);
             panLabel.Text = "Pan drag mouse button:";
 
             panButton = new MouseCaptureButton(settings.PanMouseButton);
-            panButton.Location = new Point(250, 183);
+            panButton.Location = new Point(250, 213);
             panButton.Size = new Size(185, 30);
             panButton.MouseButtonChanged += (sender, args) => UpdateNativeZoomAvailability();
 
             Button save = new Button();
             save.Text = "Save";
             save.DialogResult = DialogResult.OK;
-            save.Location = new Point(350, 245);
+            save.Location = new Point(350, 275);
             save.Click += Save_Click;
 
             Button cancel = new Button();
             cancel.Text = "Cancel";
             cancel.DialogResult = DialogResult.Cancel;
-            cancel.Location = new Point(437, 245);
+            cancel.Location = new Point(437, 275);
 
+            Controls.Add(titleBar);
             Controls.Add(description);
             Controls.Add(disableZoomBox);
+            Controls.Add(nativeZoomHint);
             Controls.Add(hint);
             Controls.Add(shortcutLabel);
             Controls.Add(shortcutButton);
@@ -682,19 +723,44 @@ namespace vatSys.PersistentPan
             UpdateNativeZoomAvailability();
         }
 
+        private void TitleBar_Paint(object sender, PaintEventArgs e)
+        {
+            using (Brush brush = new SolidBrush(Color.FromArgb(225, 225, 225)))
+            using (StringFormat format = new StringFormat
+            {
+                Alignment = StringAlignment.Center,
+                LineAlignment = StringAlignment.Center
+            })
+            {
+                e.Graphics.DrawString(Text, Font, brush,
+                    new Rectangle(0, 0, titleBar.Width - 34, titleBar.Height), format);
+            }
+        }
+
+        private void TitleBar_MouseDown(object sender, MouseEventArgs e)
+        {
+            if (e.Button == MouseButtons.Left)
+            {
+                ReleaseCapture();
+                SendMessage(Handle, WmNclButtonDown, new IntPtr(HtCaption), IntPtr.Zero);
+            }
+        }
+
         private void UpdateNativeZoomAvailability()
         {
             bool rightButtonIsPan = panButton != null && panButton.MouseButton == PanMouseButton.Right;
             if (rightButtonIsPan)
             {
                 disableZoomBox.Checked = true;
-                disableZoomBox.Enabled = false;
-                disableZoomBox.Text = "Native right-button zoom box (unavailable while Right Button is Pan)";
+                disableZoomBox.Enabled = true;
+                disableZoomBox.Text = "Disable native right-button zoom box";
+                nativeZoomHint.Text = "Right Button is used for Pan";
             }
             else
             {
                 disableZoomBox.Enabled = true;
                 disableZoomBox.Text = "Disable native right-button zoom box";
+                nativeZoomHint.Text = "";
             }
         }
 
@@ -711,7 +777,8 @@ namespace vatSys.PersistentPan
         {
             try
             {
-                settings.DisableNativeZoomBox = disableZoomBox.Checked;
+                settings.DisableNativeZoomBox = panButton.MouseButton == PanMouseButton.Right
+                    || disableZoomBox.Checked;
                 settings.SettingsShortcut = shortcutButton.Shortcut;
                 settings.PanMouseButton = panButton.MouseButton;
                 settings.Save(settingsPath);
