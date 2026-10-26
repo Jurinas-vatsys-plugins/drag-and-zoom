@@ -74,12 +74,25 @@ Click the mouse-button capture button and press the desired mouse button. The av
 
 The default is Middle Button. When another button is selected, the plugin no longer handles the middle button and vatSys receives its native middle-button input.
 
+### Keep the button's normal click
+
+Applies when a pan button other than Middle Button is selected. Enabled by default.
+
+- Enabled: a press that is released without moving is passed to vatSys as a normal click with that button (for example, left-click still selects tracks). The map pans only once the cursor moves beyond the Windows drag threshold (a few pixels) while the button is held.
+- Disabled: every press of the selected button pans and never reaches vatSys.
+
+Starting a pan with a non-middle button never triggers vatSys's middle-click functions (such as the label colour change). While a two-click vatSys function is in progress (moving a label, zoom box, BRL, reroute), the next press of the pan button goes to vatSys to complete it instead of panning.
+
+With Right Button as the pan button, right-clicks on labels and other clickspots keep working. vatSys's own zoom box (started by a right-click on an empty part of the ASD) stays suppressed while the native zoom box option is disabled.
+
 ### Native right-button zoom box
 
 This option is available only in the settings window. It is intentionally not duplicated in the top menu.
 
-- Enabled: vatSys keeps its native right-button drag zoom box.
-- Disabled: the native right-button drag zoom box is suppressed.
+vatSys's zoom box is a two-click function: the first right-click on an empty part of the ASD shows a box that follows the mouse, and the next right-click zooms to it.
+
+- Enabled: vatSys keeps its native right-button zoom box.
+- Disabled: the native right-button zoom box is suppressed. Other right-click functions, such as moving a track label, keep working.
 
 If Right Button is selected as the pan button, the option is automatically forced to Disabled and locked. Right-button drag is then reserved for persistent panning, so it cannot also be used for the native zoom box.
 

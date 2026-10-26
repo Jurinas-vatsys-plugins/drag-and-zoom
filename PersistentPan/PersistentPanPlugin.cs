@@ -31,11 +31,24 @@ namespace vatSys.PersistentPan
         private const int WmRButtonUp = 0x0205;
         private const int WmXButtonDown = 0x020B;
         private const int WmXButtonUp = 0x020C;
+        private const int WmLButtonDblClk = 0x0203;
+        private const int WmRButtonDblClk = 0x0206;
+        private const int WmXButtonDblClk = 0x020D;
         private const int WmKeyDown = 0x0100;
         private const int WmSysKeyDown = 0x0104;
+        private const int MkLButton = 0x0001;
+        private const int MkRButton = 0x0002;
+        private const int MkXButton1 = 0x0020;
+        private const int MkXButton2 = 0x0040;
+
+        [DllImport("user32.dll")]
+        private static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
 
         private readonly HashSet<Control> panning = new HashSet<Control>();
-        private readonly HashSet<Control> rightButtonDown = new HashSet<Control>();
+        // A configured (non-middle) button press that has not yet been
+        // classified as a click or a drag. See KeepOriginalClick.
+        private Control pendingAsd;
+        private Message pendingDown;
         private readonly Dictionary<IntPtr, Control> controls = new Dictionary<IntPtr, Control>();
         private readonly string logPath;
         private readonly string settingsPath;
@@ -92,39 +105,75 @@ namespace vatSys.PersistentPan
                 if (asd == null || asd.IsDisposed)
                     return false;
 
-                if (settings.DisableNativeZoomBox && settings.PanMouseButton != PanMouseButton.Right)
+                if (settings.DisableNativeZoomBox && settings.PanMouseButton != PanMouseButton.Right
+                    && (message.Msg == WmRButtonDown || message.Msg == WmRButtonDblClk))
                 {
-                    if (message.Msg == WmRButtonDown)
-                    {
-                        rightButtonDown.Add(asd);
-                        return true;
-                    }
-
-                    if (message.Msg == WmMouseMove && rightButtonDown.Contains(asd))
-                        return true;
-
-                    if (message.Msg == WmRButtonUp && rightButtonDown.Remove(asd))
-                        return true;
+                    // Let vatSys handle the right-click (label move, track
+                    // menus, ...) and only cancel the zoom box if it started.
+                    bool wasZooming = IsNativeZoomBoxActive(asd);
+                    SendMessage(message.HWnd, message.Msg, message.WParam, message.LParam);
+                    if (!wasZooming)
+                        CancelNativeZoomBox(asd);
+                    return true;
                 }
 
                 switch (message.Msg)
                 {
                     case WmLButtonDown:
+                    case WmLButtonDblClk:
                     case WmMButtonDown:
                     case WmRButtonDown:
+                    case WmRButtonDblClk:
                     case WmXButtonDown:
+                    case WmXButtonDblClk:
                         if (!IsConfiguredPanDown(message))
                             break;
-                        panning.Add(asd);
                         if (settings.PanMouseButton == PanMouseButton.Middle)
                         {
+                            panning.Add(asd);
                             Log("Pan down " + MouseX(message).ToString() + "," + MouseY(message).ToString());
                             break;
                         }
-                        BeginConfiguredPan(asd, message);
+                        pendingAsd = null;
+                        if (IsInteractiveFunctionActive())
+                        {
+                            Log("Press passed to active vatSys function");
+                            break;
+                        }
+                        if (settings.KeepOriginalClick)
+                        {
+                            // Hold the press back until we know whether this
+                            // is a click (give it to vatSys) or a drag (pan).
+                            pendingAsd = asd;
+                            pendingDown = message;
+                            return true;
+                        }
+                        if (!BeginConfiguredPan(asd, message))
+                            break;
+                        panning.Add(asd);
                         return true;
 
                     case WmMouseMove:
+                        if (pendingAsd == asd)
+                        {
+                            if (!IsConfiguredButtonHeld(message))
+                            {
+                                // The release happened outside the ASD.
+                                pendingAsd = null;
+                                break;
+                            }
+                            if (!IsBeyondDragThreshold(pendingDown, message))
+                                return true;
+                            pendingAsd = null;
+                            if (!BeginConfiguredPan(asd, pendingDown))
+                            {
+                                // Could not pan; give vatSys its press back.
+                                SendMessage(pendingDown.HWnd, pendingDown.Msg, pendingDown.WParam, pendingDown.LParam);
+                                break;
+                            }
+                            panning.Add(asd);
+                            Log("Pan drag start " + MouseX(pendingDown).ToString() + "," + MouseY(pendingDown).ToString());
+                        }
                         // The native ASD handler performs the actual pan here.
                         // We only need the final coordinates at MouseUp.
                         break;
@@ -135,20 +184,36 @@ namespace vatSys.PersistentPan
                     case WmXButtonUp:
                         if (!IsConfiguredPanUp(message))
                             break;
+                        if (pendingAsd == asd)
+                        {
+                            // Released without dragging: deliver the held-back
+                            // press straight to the window procedure, then let
+                            // the real release through so vatSys sees a normal
+                            // click with this button.
+                            pendingAsd = null;
+                            bool suppressZoomBox = settings.PanMouseButton == PanMouseButton.Right
+                                && settings.DisableNativeZoomBox;
+                            bool wasZooming = suppressZoomBox && IsNativeZoomBoxActive(asd);
+                            SendMessage(pendingDown.HWnd, pendingDown.Msg, pendingDown.WParam, pendingDown.LParam);
+                            if (suppressZoomBox && !wasZooming)
+                                CancelNativeZoomBox(asd);
+                            Log("Click passed through " + MouseX(message).ToString() + "," + MouseY(message).ToString());
+                            return false;
+                        }
                         if (panning.Remove(asd))
                         {
                             Point finalPoint = new Point(MouseX(message), MouseY(message));
                             if (settings.PanMouseButton == PanMouseButton.Middle)
                             {
                                 RestorePanAfterVatSys(asd, finalPoint, MouseButtons.Middle);
+                                Log("Pan up " + finalPoint.X.ToString() + "," + finalPoint.Y.ToString());
+                                return false;
                             }
-                            else
-                            {
-                                EndConfiguredPan(asd, finalPoint, settings.PanMouseButton);
-                            }
+                            EndConfiguredPan(asd, finalPoint, settings.PanMouseButton);
                             Log("Pan up " + finalPoint.X.ToString() + "," + finalPoint.Y.ToString());
+                            return true;
                         }
-                        return settings.PanMouseButton != PanMouseButton.Middle;
+                        return false;
 
                     case WmMouseWheel:
                         int delta = SignedHighWord(message.WParam.ToInt64());
@@ -185,8 +250,33 @@ namespace vatSys.PersistentPan
 
         private bool IsConfiguredPanDown(Message message)
         {
-            return message.Msg == PanButtonDownMessage(settings.PanMouseButton)
+            // A quick second press arrives as a double-click message instead
+            // of a normal button-down; treat it as a press as well.
+            bool isDown = message.Msg == PanButtonDownMessage(settings.PanMouseButton)
+                || (settings.PanMouseButton != PanMouseButton.Middle
+                    && message.Msg == PanButtonDblClkMessage(settings.PanMouseButton));
+            return isDown
                 && (settings.PanMouseButton < PanMouseButton.XButton1 || IsXButton(message, settings.PanMouseButton));
+        }
+
+        private bool IsConfiguredButtonHeld(Message message)
+        {
+            int keys = (int)(message.WParam.ToInt64() & 0xffff);
+            switch (settings.PanMouseButton)
+            {
+                case PanMouseButton.Left: return (keys & MkLButton) != 0;
+                case PanMouseButton.Right: return (keys & MkRButton) != 0;
+                case PanMouseButton.XButton1: return (keys & MkXButton1) != 0;
+                case PanMouseButton.XButton2: return (keys & MkXButton2) != 0;
+                default: return true;
+            }
+        }
+
+        private static bool IsBeyondDragThreshold(Message down, Message move)
+        {
+            Size drag = SystemInformation.DragSize;
+            return Math.Abs(MouseX(move) - MouseX(down)) > drag.Width / 2
+                || Math.Abs(MouseY(move) - MouseY(down)) > drag.Height / 2;
         }
 
         private bool IsConfiguredPanUp(Message message)
@@ -207,6 +297,18 @@ namespace vatSys.PersistentPan
             }
         }
 
+        private static int PanButtonDblClkMessage(PanMouseButton button)
+        {
+            switch (button)
+            {
+                case PanMouseButton.Left: return WmLButtonDblClk;
+                case PanMouseButton.Right: return WmRButtonDblClk;
+                case PanMouseButton.XButton1:
+                case PanMouseButton.XButton2: return WmXButtonDblClk;
+                default: return 0;
+            }
+        }
+
         private static int PanButtonUpMessage(PanMouseButton button)
         {
             switch (button)
@@ -221,7 +323,7 @@ namespace vatSys.PersistentPan
 
         private static bool IsXButton(Message message, PanMouseButton button)
         {
-            if (message.Msg != WmXButtonDown && message.Msg != WmXButtonUp)
+            if (message.Msg != WmXButtonDown && message.Msg != WmXButtonUp && message.Msg != WmXButtonDblClk)
                 return false;
             int highWord = (int)((message.WParam.ToInt64() >> 16) & 0xffff);
             return button == PanMouseButton.XButton1
@@ -372,21 +474,82 @@ namespace vatSys.PersistentPan
             return null;
         }
 
-        private static void BeginConfiguredPan(Control asd, Message message)
+        /// <summary>
+        /// Starts vatSys's own temporary pan at the press point. This sets
+        /// the same state as the tail of ASD_MouseDown for the middle button,
+        /// but without calling ASD_MouseDown: that would also run every
+        /// middle-click function under the cursor (label colour change,
+        /// deleting the active BRL, cancelling LATC/ToP/reroute, ...).
+        /// </summary>
+        private bool BeginConfiguredPan(Control asd, Message message)
         {
             try
             {
-                MethodInfo mouseDown = asd.GetType().GetMethod(
-                    "ASD_MouseDown", BindingFlags.Instance | BindingFlags.NonPublic);
-                if (mouseDown == null)
-                    return;
-                mouseDown.Invoke(asd, new object[] {
-                    asd,
-                    new MouseEventArgs(MouseButtons.Middle, 1,
-                        MouseX(message), MouseY(message), 0)
-                });
+                Type type = asd.GetType();
+                const BindingFlags instance = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+                MethodInfo getRenderParams = type.GetMethod("GetRenderParams", instance, null, new[] { typeof(bool) }, null);
+                FieldInfo renderSize = type.GetField("renderSize", instance);
+                FieldInfo startPanCentre = type.GetField("startPanCentre", instance);
+                FieldInfo startPanXY = type.GetField("startPanXY", instance);
+                FieldInfo startCentreXYOffset = type.GetField("startCentreXYOffset", instance);
+                FieldInfo quickPan = type.GetField("QuickPan", instance);
+                MethodInfo beginInteractive = type.GetMethod("BeginInteractiveFunction", instance, null, Type.EmptyTypes, null);
+                if (getRenderParams == null || renderSize == null || startPanCentre == null || startPanXY == null
+                    || startCentreXYOffset == null || quickPan == null || beginInteractive == null)
+                {
+                    Log("Pan start failed: vatSys pan members not found");
+                    return false;
+                }
+
+                object renderParams = getRenderParams.Invoke(asd, new object[] { false });
+                object screenCentre = renderParams.GetType().GetProperty("ScreenCentre").GetValue(renderParams, null);
+                object size = renderSize.GetValue(asd);
+                float width = Convert.ToSingle(ReadMember(size, "Width"));
+                float height = Convert.ToSingle(ReadMember(size, "Height"));
+                float x = MouseX(message);
+                float y = MouseY(message);
+
+                startPanCentre.SetValue(asd, screenCentre);
+                startPanXY.SetValue(asd, Activator.CreateInstance(startPanXY.FieldType, x, y));
+                startCentreXYOffset.SetValue(asd, Activator.CreateInstance(
+                    startCentreXYOffset.FieldType, width / 2f - x, height / 2f - y));
+                quickPan.SetValue(asd, true);
+                beginInteractive.Invoke(asd, null);
+                return true;
             }
-            catch { }
+            catch (Exception exception)
+            {
+                Log("Pan start failed: " + exception);
+                return false;
+            }
+        }
+
+        private static object ReadMember(object target, string name)
+        {
+            Type type = target.GetType();
+            FieldInfo field = type.GetField(name, BindingFlags.Instance | BindingFlags.Public);
+            if (field != null)
+                return field.GetValue(target);
+            return type.GetProperty(name, BindingFlags.Instance | BindingFlags.Public).GetValue(target, null);
+        }
+
+        /// <summary>
+        /// True while vatSys has a two-click ASD function in progress (label
+        /// move, zoom box, BRL, reroute, ...). Its next press must reach
+        /// vatSys to complete it, so the plugin does not pan then.
+        /// </summary>
+        private static bool IsInteractiveFunctionActive()
+        {
+            try
+            {
+                FieldInfo active = typeof(MMI).GetField("ASD_INTERACTIVE_FUNCTION_ACTIVE",
+                    BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
+                return active != null && (bool)active.GetValue(null);
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         private static void EndConfiguredPan(Control asd, Point finalPoint, PanMouseButton button)
@@ -410,6 +573,42 @@ namespace vatSys.PersistentPan
                     "EndInteractiveFunction", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
                 if (endInteractive != null)
                     endInteractive.Invoke(asd, null);
+            }
+            catch { }
+        }
+
+        // vatSys's zoom box is a two-click toggle: a right-button press on an
+        // empty part of the ASD sets "zooming" and the box follows the mouse
+        // until the next right-button press applies it. Right presses on
+        // clickspots (labels, track menus) never start it.
+        private static bool IsNativeZoomBoxActive(Control asd)
+        {
+            try
+            {
+                FieldInfo zooming = asd.GetType().GetField(
+                    "zooming", BindingFlags.Instance | BindingFlags.NonPublic);
+                return zooming != null && (bool)zooming.GetValue(asd);
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private void CancelNativeZoomBox(Control asd)
+        {
+            try
+            {
+                FieldInfo zooming = asd.GetType().GetField(
+                    "zooming", BindingFlags.Instance | BindingFlags.NonPublic);
+                if (zooming == null || !(bool)zooming.GetValue(asd))
+                    return;
+                zooming.SetValue(asd, false);
+                MethodInfo endInteractive = asd.GetType().GetMethod(
+                    "EndInteractiveFunction", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                if (endInteractive != null)
+                    endInteractive.Invoke(asd, null);
+                Log("Native zoom box suppressed");
             }
             catch { }
         }
@@ -526,6 +725,12 @@ namespace vatSys.PersistentPan
 
         public PanMouseButton PanMouseButton { get; set; } = PanMouseButton.Middle;
 
+        /// <summary>
+        /// When a non-middle pan button is configured, a press released
+        /// without dragging is passed to vatSys as a normal click.
+        /// </summary>
+        public bool KeepOriginalClick { get; set; } = true;
+
         public static PersistentPanSettings Load(string path)
         {
             PersistentPanSettings result = new PersistentPanSettings();
@@ -562,6 +767,12 @@ namespace vatSys.PersistentPan
                         if (Enum.TryParse(value.Substring("PanMouseButton=".Length).Trim(), true, out parsed))
                             result.PanMouseButton = parsed;
                     }
+                    else if (value.StartsWith("KeepOriginalClick=", StringComparison.OrdinalIgnoreCase))
+                    {
+                        bool parsed;
+                        if (bool.TryParse(value.Substring("KeepOriginalClick=".Length).Trim(), out parsed))
+                            result.KeepOriginalClick = parsed;
+                    }
                 }
             }
             catch { }
@@ -575,7 +786,8 @@ namespace vatSys.PersistentPan
                 "Enabled=" + Enabled.ToString(),
                 "DisableNativeZoomBox=" + DisableNativeZoomBox.ToString(),
                 "SettingsShortcut=" + SettingsShortcut.ToString(),
-                "PanMouseButton=" + PanMouseButton.ToString()
+                "PanMouseButton=" + PanMouseButton.ToString(),
+                "KeepOriginalClick=" + KeepOriginalClick.ToString()
             });
         }
     }
@@ -597,6 +809,7 @@ namespace vatSys.PersistentPan
         private readonly CheckBox disableZoomBox;
         private readonly KeyCaptureButton shortcutButton;
         private readonly MouseCaptureButton panButton;
+        private readonly CheckBox keepOriginalClick;
         private readonly Panel titleBar;
         private readonly Label nativeZoomHint;
 
@@ -612,7 +825,7 @@ namespace vatSys.PersistentPan
             StartPosition = FormStartPosition.CenterScreen;
             MaximizeBox = false;
             MinimizeBox = false;
-            ClientSize = new Size(520, 315);
+            ClientSize = new Size(520, 350);
             ShowInTaskbar = false;
             FormClosing += PanSettingsWindow_FormClosing;
             try
@@ -669,7 +882,7 @@ namespace vatSys.PersistentPan
             Label hint = new Label();
             hint.AutoSize = true;
             hint.Location = new Point(18, 112);
-            hint.Text = "When enabled, right-button drag on the ASD is ignored.";
+            hint.Text = "Right-clicks still work; only the zoom box is cancelled.";
 
             Label shortcutLabel = new Label();
             shortcutLabel.AutoSize = true;
@@ -695,16 +908,22 @@ namespace vatSys.PersistentPan
             panButton.Size = new Size(185, 30);
             panButton.MouseButtonChanged += (sender, args) => UpdateNativeZoomAvailability();
 
+            keepOriginalClick = new CheckBox();
+            keepOriginalClick.AutoSize = true;
+            keepOriginalClick.Location = new Point(18, 258);
+            keepOriginalClick.Text = "Keep the button's normal click (pan only when dragging)";
+            keepOriginalClick.Checked = settings.KeepOriginalClick;
+
             Button save = new Button();
             save.Text = "Save";
             save.DialogResult = DialogResult.OK;
-            save.Location = new Point(350, 275);
+            save.Location = new Point(350, 310);
             save.Click += Save_Click;
 
             Button cancel = new Button();
             cancel.Text = "Cancel";
             cancel.DialogResult = DialogResult.Cancel;
-            cancel.Location = new Point(437, 275);
+            cancel.Location = new Point(437, 310);
 
             Controls.Add(titleBar);
             Controls.Add(description);
@@ -716,6 +935,7 @@ namespace vatSys.PersistentPan
             Controls.Add(shortcutHint);
             Controls.Add(panLabel);
             Controls.Add(panButton);
+            Controls.Add(keepOriginalClick);
             Controls.Add(save);
             Controls.Add(cancel);
             AcceptButton = save;
@@ -762,6 +982,10 @@ namespace vatSys.PersistentPan
                 disableZoomBox.Text = "Disable native right-button zoom box";
                 nativeZoomHint.Text = "";
             }
+
+            // The middle button's native function already is panning.
+            if (keepOriginalClick != null)
+                keepOriginalClick.Enabled = panButton == null || panButton.MouseButton != PanMouseButton.Middle;
         }
 
         private void PanSettingsWindow_FormClosing(object sender, FormClosingEventArgs e)
@@ -781,6 +1005,7 @@ namespace vatSys.PersistentPan
                     || disableZoomBox.Checked;
                 settings.SettingsShortcut = shortcutButton.Shortcut;
                 settings.PanMouseButton = panButton.MouseButton;
+                settings.KeepOriginalClick = keepOriginalClick.Checked;
                 settings.Save(settingsPath);
                 if (log != null)
                     log("Settings saved; DisableNativeZoomBox=" + settings.DisableNativeZoomBox.ToString());
