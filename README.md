@@ -23,23 +23,25 @@ Repository: <https://github.com/Jurinas-vatsys-plugins/drag-and-zoom>
 
 ## Installation
 
-Download `vatSys.DragAndZoom.dll` from the [Releases](https://github.com/Jurinas-vatsys-plugins/drag-and-zoom/releases) page.
+Download `vatSys.DragAndZoom-<version>.zip` from the [Releases](https://github.com/Jurinas-vatsys-plugins/drag-and-zoom/releases) page. It contains one folder, `vatSys.DragAndZoom`, with the plugin DLL. Extract that folder into a `Plugins` directory.
 
-The DLL can be installed for one Profile:
+For one Profile:
 
 ```text
-C:\Users\<username>\Documents\vatSys Files\Profiles\<Profile Name>\Plugins\vatSys.DragAndZoom.dll
+C:\Users\<username>\Documents\vatSys Files\Profiles\<Profile Name>\Plugins\vatSys.DragAndZoom\vatSys.DragAndZoom.dll
 ```
 
 Or globally for the vatSys installation:
 
 ```text
-<vatSys installation>\bin\Plugins\vatSys.DragAndZoom.dll
+<vatSys installation>\bin\Plugins\vatSys.DragAndZoom\vatSys.DragAndZoom.dll
 ```
 
-The vatSys plugin loader scans both locations. Install the DLL in only one location. Use the Profile directory for Profile-specific behaviour, or `bin\Plugins` to make the plugin available to all Profiles.
+The vatSys plugin loader scans both locations, including their subfolders. Install the plugin in only one location. Use the Profile directory for Profile-specific behaviour, or `bin\Plugins` to make the plugin available to all Profiles. The plugin keeps its log and settings in the same folder as the DLL.
 
-Close vatSys before installing or replacing the DLL; a running vatSys keeps the file locked. Start vatSys again afterwards.
+Close vatSys before installing or replacing the plugin; a running vatSys keeps the DLL locked. Start vatSys again afterwards.
+
+When upgrading from v2.0.0, which shipped as a bare DLL, delete the old `vatSys.DragAndZoom.dll` that sits directly in `Plugins`.
 
 The DLL must be built against the exact `vatSys.exe` that loads it. A DLL built against a different vatSys release may not load.
 
@@ -49,9 +51,9 @@ Up to v1.4.0 this plugin was called Persistent Pan and shipped as `vatSys.Persis
 
 1. Close vatSys.
 2. Delete every `vatSys.PersistentPan.dll` (in `bin\Plugins` and in each Profile's `Plugins` directory). Otherwise both plugins load and handle the mouse twice.
-3. Install `vatSys.DragAndZoom.dll` as described above.
+3. Install the `vatSys.DragAndZoom` folder as described above.
 
-Existing settings in `PersistentPan.settings` are read automatically on the first start and saved to `DragAndZoom.settings` from then on.
+To keep your old settings, copy `PersistentPan.settings` into the `vatSys.DragAndZoom` folder before starting vatSys. It is read automatically on the first start, and settings are saved to `DragAndZoom.settings` from then on.
 
 The earlier separate right-button-only "Drag-and-zoom" plugin is replaced by this one. To get its behaviour, select Right Button as the pan button.
 
@@ -162,7 +164,7 @@ Windows may block DLL files downloaded from the Internet.
 PowerShell alternative:
 
 ```powershell
-Unblock-File "C:\Users\<username>\Documents\vatSys Files\Profiles\<Profile Name>\Plugins\vatSys.DragAndZoom.dll"
+Unblock-File "C:\Users\<username>\Documents\vatSys Files\Profiles\<Profile Name>\Plugins\vatSys.DragAndZoom\vatSys.DragAndZoom.dll"
 ```
 
 ## Building

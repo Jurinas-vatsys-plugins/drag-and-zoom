@@ -6,6 +6,7 @@ using System.Drawing.Drawing2D;
 using System.IO;
 using System.Reflection;
 using System.Runtime.InteropServices;
+using System.Threading;
 using System.Windows.Forms;
 using vatsys;
 using vatsys.Plugin;
@@ -54,7 +55,9 @@ namespace vatSys.DragAndZoom
         private readonly string logPath;
         private readonly string settingsPath;
         private DragAndZoomSettings settings;
+        private Thread settingsThread;
         private DragAndZoomSettingsWindow settingsWindow;
+        private readonly object settingsWindowLock = new object();
         private ToolStripMenuItem enabledMenuItem;
         private ToolStripMenuItem disabledMenuItem;
 
@@ -336,38 +339,69 @@ namespace vatSys.DragAndZoom
                 : highWord == 2;
         }
 
-        // Runs on the vatSys GUI thread like vatSys's own windows (menu clicks
-        // are marshalled with MMI.InvokeOnGUI; the shortcut arrives through
-        // this filter, which already runs on that thread).
+        // The window runs on its own UI thread. On the vatSys GUI thread the
+        // ASD keeps taking the keyboard focus (ASD_MouseMove calls Focus()),
+        // and a WinForms button that loses focus between press and release
+        // never raises Click, so Save and the capture buttons did nothing.
+        // Focus cannot be moved across threads, which keeps the window usable.
         private void ShowSettingsWindow()
+        {
+            lock (settingsWindowLock)
+            {
+                if (settingsWindow != null && !settingsWindow.IsDisposed)
+                {
+                    DragAndZoomSettingsWindow window = settingsWindow;
+                    try
+                    {
+                        window.BeginInvoke((MethodInvoker)(() =>
+                        {
+                            window.LoadSettings();
+                            window.Show();
+                            window.WindowState = FormWindowState.Normal;
+                            window.Activate();
+                            window.BringToFront();
+                            Log("Settings window shown");
+                        }));
+                    }
+                    catch (InvalidOperationException) { }
+                    return;
+                }
+
+                if (settingsThread != null && settingsThread.IsAlive)
+                    return;
+
+                settingsThread = new Thread(SettingsThreadMain);
+                settingsThread.IsBackground = true;
+                settingsThread.SetApartmentState(ApartmentState.STA);
+                settingsThread.Start();
+            }
+        }
+
+        private void SettingsThreadMain()
         {
             try
             {
-                if (settingsWindow == null || settingsWindow.IsDisposed)
+                DragAndZoomSettingsWindow window = new DragAndZoomSettingsWindow(settings, settingsPath, Log);
+                window.SettingsSaved += (sender, args) => MMI.InvokeOnGUI(UpdateMenuState);
+                lock (settingsWindowLock)
                 {
-                    settingsWindow = new DragAndZoomSettingsWindow(settings, settingsPath, Log);
-                    settingsWindow.SettingsSaved += (sender, args) => UpdateMenuState();
+                    settingsWindow = window;
                 }
-
-                settingsWindow.LoadSettings();
-                settingsWindow.Show(FindMainForm());
-                settingsWindow.Activate();
-                settingsWindow.BringToFront();
+                Log("Settings window opened");
+                Application.Run(window);
             }
             catch (Exception exception)
             {
                 Log("Settings window failed: " + exception);
             }
-        }
-
-        private static Form FindMainForm()
-        {
-            foreach (Form form in Application.OpenForms)
+            finally
             {
-                if (form.GetType().FullName == "vatsys.MainForm")
-                    return form;
+                lock (settingsWindowLock)
+                {
+                    settingsWindow = null;
+                    settingsThread = null;
+                }
             }
-            return Form.ActiveForm;
         }
 
         private void AddMenuItems()
@@ -807,6 +841,10 @@ namespace vatSys.DragAndZoom
             HasMinimizeButton = false;
             MiddleClickClose = false;
             HideOnClose = true;
+            // Runs on its own thread, so it cannot be owned by the vatSys
+            // main window; stay on top of it instead.
+            TopMost = true;
+            FormClosing += (sender, args) => Log("Settings window closed without saving");
             ShowInTaskbar = false;
             ClientSize = new Size(460, 300);
 
@@ -858,7 +896,11 @@ namespace vatSys.DragAndZoom
             cancel.Text = "Cancel";
             cancel.Size = new Size(90, 28);
             cancel.Location = new Point(ClientSize.Width - Edge - 90, y);
-            cancel.Click += (sender, args) => Hide();
+            cancel.Click += (sender, args) =>
+            {
+                Log("Settings cancelled");
+                Hide();
+            };
             Controls.Add(cancel);
 
             ClientSize = new Size(ClientSize.Width, y + 28 + Edge);
@@ -954,17 +996,23 @@ namespace vatSys.DragAndZoom
                     || disableZoomBox.Checked;
                 settings.SettingsShortcut = shortcutButton.Shortcut;
                 settings.Save(settingsPath);
-                if (log != null)
-                    log("Settings saved; PanMouseButton=" + settings.PanMouseButton.ToString()
-                        + "; KeepOriginalClick=" + settings.KeepOriginalClick.ToString()
-                        + "; DisableNativeZoomBox=" + settings.DisableNativeZoomBox.ToString());
+                Log("Settings saved; PanMouseButton=" + settings.PanMouseButton.ToString()
+                    + "; KeepOriginalClick=" + settings.KeepOriginalClick.ToString()
+                    + "; DisableNativeZoomBox=" + settings.DisableNativeZoomBox.ToString());
                 SettingsSaved?.Invoke(this, EventArgs.Empty);
                 Hide();
             }
             catch (Exception exception)
             {
+                Log("Settings save failed: " + exception);
                 MessageBox.Show(this, exception.Message, "Could not save Drag and Zoom settings", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
+        }
+
+        private void Log(string text)
+        {
+            if (log != null)
+                log(text);
         }
     }
 
